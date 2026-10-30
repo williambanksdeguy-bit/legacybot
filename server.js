@@ -89,6 +89,8 @@ async function init() {
       created_at TEXT NOT NULL DEFAULT (to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS'))
     )`);
   await q('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  // Bot on/off switch the client controls from their dashboard (added after first release)
+  await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS bot_running BOOLEAN NOT NULL DEFAULT false');
   const admin = await q("SELECT 1 FROM users WHERE role='admin' LIMIT 1");
   if (!admin.rowCount && process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
     await q("INSERT INTO users (email, pass_hash, role, status) VALUES ($1,$2,'admin','approved') ON CONFLICT (email) DO NOTHING",
@@ -172,6 +174,7 @@ function publicUser(u) {
     has_investor_password: !!u.mt5_investor_enc,
     pay_network: u.pay_network, pay_amount: u.pay_amount, pay_proof: u.pay_proof,
     whatsapp: u.whatsapp, admin_note: u.admin_note, created_at: u.created_at,
+    bot_running: !!u.bot_running,
   };
 }
 
@@ -248,6 +251,15 @@ app.put('/api/me/contact', auth, ah(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Start / stop the bot. Only for approved clients who have saved their MT5 details.
+app.put('/api/me/bot', auth, ah(async (req, res) => {
+  if (typeof req.body.running !== 'boolean') return res.status(400).json({ error: 'running must be true or false' });
+  if (req.user.status !== 'approved') return res.status(403).json({ error: 'The bot opens once your payment is approved' });
+  if (!req.user.mt5_login) return res.status(400).json({ error: 'Save your MT5 details first' });
+  await q('UPDATE users SET bot_running=$1 WHERE id=$2', [req.body.running, req.user.id]);
+  res.json({ ok: true, bot_running: req.body.running });
+}));
+
 // ---- admin API ----
 app.get('/api/admin/stats', auth, adminOnly, ah(async (_req, res) => {
   const { rows } = await q(`
@@ -281,7 +293,7 @@ app.post('/api/admin/users/:id/status', auth, adminOnly, ah(async (req, res) => 
   if (!['approved', 'rejected', 'pending'].includes(status)) return res.status(400).json({ error: 'Bad status' });
   const id = idParam(req);
   if (id === null) return res.status(404).json({ error: 'User not found' });
-  const r = await q("UPDATE users SET status=$1, admin_note=$2 WHERE id=$3 AND role='user'", [status, clean(req.body.note, 300) || null, id]);
+  const r = await q("UPDATE users SET status=$1, admin_note=$2, bot_running=(bot_running AND $1='approved') WHERE id=$3 AND role='user'", [status, clean(req.body.note, 300) || null, id]);
   if (!r.rowCount) return res.status(404).json({ error: 'User not found' });
   await audit(req, 'set_' + status, id);
   res.json({ ok: true });

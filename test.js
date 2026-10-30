@@ -41,6 +41,7 @@ const server = app.listen(0, async () => {
     // MT5 details are locked until the payment is approved
     const acct = { broker: 'exness', mt5_login: '484054192', mt5_server: 'Exness-MT5Real35', mt5_investor: 'invpass1' };
     assert.equal((await call('u', 'PUT', '/api/me/account', acct)).status, 403, 'account locked before approval');
+    assert.equal((await call('u', 'PUT', '/api/me/bot', { running: true })).status, 403, 'bot locked before approval');
     assert.equal((await call('u', 'PUT', '/api/me/payment', { pay_network: 'USDT', pay_amount: '100', pay_proof: 'abc123abc123' })).status, 200);
     assert.equal((await call('u', 'PUT', '/api/me/account', acct)).status, 403, 'still locked while pending');
     assert.equal((await call('u', 'PUT', '/api/me/contact', { whatsapp: '12' })).status, 400);
@@ -62,6 +63,19 @@ const server = app.listen(0, async () => {
     assert.equal(me.status, 'approved');
     assert.equal(me.has_investor_password, true);
     assert.ok(!('mt5_investor_enc' in me) && !('pass_hash' in me), 'no secrets leak to client');
+
+    // bot start / stop
+    assert.equal((await call('u', 'PUT', '/api/me/bot', { running: 'yes' })).status, 400, 'running must be a boolean');
+    assert.equal((await call('u', 'PUT', '/api/me/bot', { running: true })).status, 200);
+    assert.equal((await call('u', 'GET', '/api/me')).data.bot_running, true, 'bot is running');
+    assert.equal((await call('u', 'PUT', '/api/me/bot', { running: false })).status, 200);
+    assert.equal((await call('u', 'GET', '/api/me')).data.bot_running, false, 'bot is stopped');
+    // un-approving a client switches their bot off
+    await call('u', 'PUT', '/api/me/bot', { running: true });
+    assert.equal((await call('a', 'POST', `/api/admin/users/${me.id}/status`, { status: 'pending' })).status, 200);
+    assert.equal((await call('u', 'GET', '/api/me')).data.bot_running, false, 'bot switched off when approval is withdrawn');
+    assert.equal((await call('u', 'PUT', '/api/me/bot', { running: true })).status, 403, 'cannot start while not approved');
+    await call('a', 'POST', `/api/admin/users/${me.id}/status`, { status: 'approved' });
 
     users = (await call('a', 'GET', '/api/admin/users')).data;
     assert.ok(!JSON.stringify(users).includes('invpass1'), 'password not in list');

@@ -29,6 +29,11 @@ Serve it behind HTTPS (the session cookie is `Secure` in production). Neon keeps
 
 Admin panel: search by email, MT5 login or WhatsApp; filter All / Approved / Pending / Rejected; Show/Hide button on each password (every reveal is logged); Delete button on each user; and a "Contact details" box where you set the email and WhatsApp number shown to clients. Clients can also leave their own WhatsApp number, which appears on their card.
 
+## Bot dashboard
+Once a client is approved and has saved their MT5 details, their dashboard becomes a bot dashboard: account status, MT5 account card, an animated market chart, and Start / Stop buttons. Start and Stop save a `bot_running` flag on the user (Postgres column added automatically on start). Withdrawing approval (Reject or Set pending) switches the flag off.
+
+The chart is a decorative animation and is labelled as such on screen. The flag is only a switch: it does not connect to MT5 by itself. A separate worker that actually trades should read `bot_running` and act on it.
+
 ## Security notes
 - Ask clients for the MT5 investor (read-only) password where possible, not the master password.
 - Login passwords are hashed with bcrypt. MT5 passwords are AES-256-GCM encrypted and masked until you press Show.
