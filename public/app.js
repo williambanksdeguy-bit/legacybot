@@ -56,12 +56,12 @@
     $app.innerHTML = `
       <section class="hero">
         <h1>Legacy <span class="gold">Bot</span></h1>
-        <p>Managed MT5 trading. Make your payment, get approved, then connect your account. We keep you updated at every step.</p>
-        <div class="row center"><a class="btn solid" href="#/register">Get started</a><a class="btn" href="#/login">Log in</a></div>
+        <p>Managed MT5 trading. Pick a plan, pay with mobile money, card or crypto, then connect your account.</p>
+        <div class="row center"><a class="btn solid" href="#/plans">See plans</a><a class="btn" href="#/register">Get started</a><a class="btn" href="#/login">Log in</a></div>
       </section>
       <section class="grid how">
-        <div class="card"><span class="num">1</span><h3>Pay</h3><p class="note">Send your payment in crypto and submit the transaction ID.</p></div>
-        <div class="card"><span class="num">2</span><h3>Get approved</h3><p class="note">We verify your payment and approve your account.</p></div>
+        <div class="card"><span class="num">1</span><h3>Pay</h3><p class="note">Choose a plan and pay with mobile money or card, or send crypto and submit the transaction ID.</p></div>
+        <div class="card"><span class="num">2</span><h3>Get approved</h3><p class="note">Mobile money and card payments are approved automatically. Crypto payments are checked by us.</p></div>
         <div class="card"><span class="num">3</span><h3>Connect MT5</h3><p class="note">Once approved, add your MT5 details and we take it from there.</p></div>
       </section>
       ${contact ? `<section class="card contact"><h3>Questions? Talk to us</h3><div class="row center">${contact}</div></section>` : ''}
@@ -80,6 +80,7 @@
         <div class="msg" id="msg"></div>
         <button class="btn solid" type="submit">${isReg ? 'Sign up' : 'Log in'}</button>
         <a href="#/${isReg ? 'login' : 'register'}" class="note">${isReg ? 'Already registered? Log in' : 'New here? Create an account'}</a>
+        ${isReg ? '' : '<a href="#/forgot" class="note">Forgot your password?</a>'}
       </form>`;
     document.getElementById('f').onsubmit = async (e) => {
       e.preventDefault();
@@ -90,6 +91,50 @@
         location.hash = r.role === 'admin' ? '#/admin' : '#/dashboard';
       } catch (err) { document.getElementById('msg').textContent = err.message; }
     };
+  }
+
+  // ---------- forgot / reset password, email confirmation ----------
+  function viewForgot() {
+    $app.innerHTML = `
+      <form class="form card" id="f">
+        <h2>Forgot password</h2>
+        <p class="note">Enter your email and we will send you a link to choose a new password.</p>
+        <label>Email<input type="email" name="email" required autocomplete="email"></label>
+        <div class="msg" id="msg"></div>
+        <button class="btn solid" type="submit">Send reset link</button>
+        <a href="#/login" class="note">Back to log in</a>
+      </form>`;
+    document.getElementById('f').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api('POST', '/api/forgot', { email: new FormData(e.target).get('email') });
+        $app.innerHTML = '<div class="form card"><h2>Check your email</h2><p class="note">If that email has an account, a reset link is on its way. It works for 1 hour. Check your spam folder too.</p><a class="btn solid" href="#/login">Back to log in</a></div>';
+      } catch (err) { document.getElementById('msg').textContent = err.message; }
+    };
+  }
+
+  function viewReset(token) {
+    $app.innerHTML = `
+      <form class="form card" id="f">
+        <h2>Choose a new password</h2>
+        <label>New password<input type="password" name="password" required minlength="10" autocomplete="new-password"></label>
+        <span class="note">At least 10 characters.</span>
+        <div class="msg" id="msg"></div>
+        <button class="btn solid" type="submit">Save password</button>
+      </form>`;
+    document.getElementById('f').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        await api('POST', '/api/reset', { token, password: new FormData(e.target).get('password') });
+        $app.innerHTML = '<div class="form card"><h2>Password changed</h2><p class="note">You can log in with your new password now.</p><a class="btn solid" href="#/login">Log in</a></div>';
+      } catch (err) { document.getElementById('msg').textContent = err.message; }
+    };
+  }
+
+  function viewVerified(ok) {
+    $app.innerHTML = ok
+      ? '<div class="form card"><h2>Email confirmed</h2><p class="note">Thank you. Your email address is confirmed.</p><a class="btn solid" href="#/dashboard">Go to my dashboard</a></div>'
+      : '<div class="form card"><h2>Link not valid</h2><p class="note">This confirmation link has expired or was already used. Log in and press "Send again" to get a new one.</p><a class="btn solid" href="#/dashboard">Go to my dashboard</a></div>';
   }
 
   // ---------- animated market chart (canvas, CSP-safe) ----------
@@ -270,6 +315,108 @@
     document.getElementById('editAcc').onclick = () => { editAcc = true; viewDashboard(); };
   }
 
+  // ---------- plans and online payment ----------
+  let selectedPlan = null;
+  const money = (n) => Number(n).toLocaleString('en-US');
+  const planDays = (d) => (d % 365 === 0 ? `${d / 365} year${d / 365 > 1 ? 's' : ''}` : `${d} days`);
+
+  async function plansHtml() {
+    let data = { currencies: [], plans: [] };
+    try { data = await api('GET', '/api/plans'); } catch { /* shown as empty */ }
+    const cur = data.currencies[0] || '';
+    const rows = data.plans.map((p) => `
+      <div class="plan ${selectedPlan === p.id ? 'sel' : ''}">
+        <div><b>${esc(p.name)}</b><small class="note">${planDays(p.days)}${p.note ? ' - ' + esc(p.note) : ''}</small></div>
+        <div class="price"><b>$${esc(p.total_usd)}</b><small class="note">$${esc(p.price_usd)} plan${Number(p.tax_usd) ? ` + $${esc(p.tax_usd)} tax` : ''}${cur ? ` &middot; ${cur} ${money(p.prices[cur])}` : ''}</small></div>
+        <button type="button" class="btn small solid" data-plan="${p.id}" ${cur ? '' : 'disabled'}>${me ? 'Buy this plan' : 'Sign up to buy'}</button>
+      </div>`).join('');
+    const note = !data.plans.length ? '<p class="note">No plans are available right now.</p>'
+      : cur ? '' : '<p class="note">Online payment is not switched on yet. Pay with crypto below, or contact us.</p>';
+    return { html: `<div class="plans">${rows}</div>${note}<div id="payBox"></div>`, data, cur };
+  }
+
+  function bindPlans(root, info) {
+    root.onclick = (e) => {
+      const b = e.target.closest('button[data-plan]');
+      if (!b) return;
+      if (!me) { location.hash = '#/register'; return; }
+      selectedPlan = Number(b.dataset.plan);
+      root.querySelectorAll('.plan').forEach((el) => el.classList.toggle('sel', el.contains(b)));
+      const p = info.data.plans.find((x) => x.id === selectedPlan);
+      const box = root.querySelector('#payBox');
+      const methods = info.data.methods && info.data.methods.length ? info.data.methods : ['mobile_money'];
+      box.innerHTML = `
+        <form class="grid payform" id="momo">
+          <h3 class="sec">Pay for ${esc(p.name)}</h3>
+          <p class="note">You pay ${info.cur} ${money(p.prices[info.cur])}.</p>
+          ${methods.length > 1
+            ? `<div class="seg"><label class="inline"><input type="radio" name="method" value="mobile_money" checked> Mobile money</label><label class="inline"><input type="radio" name="method" value="card"> Visa / Mastercard</label></div>`
+            : '<input type="hidden" name="method" value="mobile_money">'}
+          <div id="phoneWrap"><label>Mobile money number<input name="phone" inputmode="tel" autocomplete="tel" placeholder="0772 123 456" required></label>
+            <p class="note">A prompt will appear on your phone. Approve it to finish.</p></div>
+          <p class="note" id="cardNote" hidden>You will be taken to MarzPay's secure page to pay by card, then brought back here.</p>
+          <div class="msg" id="mp"></div>
+          <button class="btn solid" type="submit">Pay ${info.cur} ${money(p.prices[info.cur])}</button>
+        </form>`;
+      const f = box.querySelector('#momo');
+      const syncMethod = () => {
+        const card = f.elements.method.value === 'card';
+        f.querySelector('#phoneWrap').hidden = card;
+        f.querySelector('#cardNote').hidden = !card;
+        f.elements.phone.required = !card;
+      };
+      f.addEventListener('change', syncMethod);
+      syncMethod();
+      f.onsubmit = async (ev) => {
+        ev.preventDefault();
+        const btn = f.querySelector('button[type=submit]');
+        btn.disabled = true;
+        const fd = new FormData(f);
+        try {
+          const r = await api('POST', '/api/me/pay', { plan_id: selectedPlan, currency: info.cur, method: fd.get('method'), phone: fd.get('phone') });
+          if (r.redirect_url && /^https:\/\//.test(r.redirect_url)) location.href = r.redirect_url;
+          else location.hash = '#/pay/' + r.order_id;
+        } catch (err) { f.querySelector('#mp').textContent = err.message; btn.disabled = false; }
+      };
+      f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+  }
+
+  async function viewPlans() {
+    await Promise.all([loadMe(), loadCfg()]);
+    renderNav();
+    const info = await plansHtml();
+    $app.innerHTML = `<div class="grid stack"><div class="card grid"><h2>Choose your plan</h2>${info.html}</div>
+      ${me ? '' : '<p class="note center">Already have an account? <a href="#/login">Log in</a></p>'}</div>`;
+    bindPlans($app.querySelector('.card'), info);
+  }
+
+  let payRun = 0;
+  async function viewPay(id) {
+    if (!me) { location.hash = '#/login'; return; }
+    const run = ++payRun;
+    $app.innerHTML = `<div class="grid stack"><div class="card grid center" id="paybox"><h2>Waiting for payment</h2><p class="note">Finish the payment (approve the prompt on your phone, or complete the card page). This page updates by itself.</p><div class="spin"></div></div></div>`;
+    const box = document.getElementById('paybox');
+    const tick = async () => {
+      if (run !== payRun || !box.isConnected) return;
+      let o;
+      try { o = await api('GET', '/api/me/orders/' + encodeURIComponent(id)); }
+      catch (err) { if (err.status === 401 || err.status === 404) { location.hash = '#/dashboard'; return; } setTimeout(tick, 5000); return; }
+      if (run !== payRun || !box.isConnected) return;
+      if (o.status === 'PAID') {
+        await loadMe();
+        box.innerHTML = `<h2>Payment received</h2><p class="note">${esc(o.plan_name)} is active. Your MT5 details are open now.</p><a class="btn solid" href="#/dashboard">Continue</a>`;
+        return;
+      }
+      if (o.status === 'FAILED' || o.status === 'EXPIRED') {
+        box.innerHTML = `<h2>${o.status === 'FAILED' ? 'Payment did not go through' : 'Payment timed out'}</h2><p class="note">${esc(o.note || 'No money was taken, or it will be returned. You can try again.')}</p><a class="btn solid" href="#/plans">Try again</a>`;
+        return;
+      }
+      setTimeout(tick, 4000);
+    };
+    tick();
+  }
+
   // ---------- client dashboard ----------
   async function viewDashboard() {
     if (!me) { location.hash = '#/login'; return; }
@@ -277,9 +424,10 @@
     const u = me;
     const approved = u.status === 'approved';
     const rejected = u.status === 'rejected';
+    const expired = u.status === 'expired';
     const paid = !!u.pay_proof;
     const hasDetails = !!u.mt5_login;
-    const step = approved ? (hasDetails ? 4 : 3) : paid && !rejected ? 2 : 1;
+    const step = approved ? (hasDetails ? 4 : 3) : paid && !rejected && !expired ? 2 : 1;
     const showBot = approved && hasDetails && !editAcc;
     chartStop();
     const steps = ['Payment', 'Review', 'MT5 details'];
@@ -287,9 +435,13 @@
     let banner;
     if (approved && hasDetails) banner = ['ok', 'Payment approved and MT5 details saved. Use Bot control below to start or stop the bot.'];
     else if (approved) banner = ['ok', 'Payment approved. Add your MT5 details below to get started.'];
+    else if (expired) banner = ['bad', 'Your plan has ended and the bot is stopped. Choose a plan below to continue.'];
     else if (rejected) banner = ['bad', `Your payment was not approved.${u.admin_note ? ' Note from us: ' + u.admin_note : ''} Please check the details and submit again.`];
-    else if (paid) banner = ['wait', 'Payment received. We are reviewing it now and your MT5 details will open once it is approved.'];
-    else banner = ['info', 'Welcome. Send your payment and submit the transaction ID to get started.'];
+    else if (paid && !rejected) banner = ['wait', 'Payment received. We are reviewing it now and your MT5 details will open once it is approved.'];
+    else banner = ['info', 'Welcome. Choose a plan to get started.'];
+    const info = approved ? null : await plansHtml();
+    const endsTxt = u.plan_ends_at ? new Date(u.plan_ends_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+    const left = u.plan_ends_at ? Math.max(0, Math.ceil((new Date(u.plan_ends_at) - Date.now()) / 86400000)) : null;
 
     const addr = cfg.payAddress
       ? `<div class="pay"><small class="note">Send ${esc(cfg.payAmount)} via ${esc(cfg.payNetwork)} to</small><div class="addr"><b>${esc(cfg.payAddress)}</b><button type="button" class="btn small" id="copy">Copy</button></div></div>`
@@ -304,19 +456,22 @@
           <div class="banner ${banner[0]}">${esc(banner[1])}</div>
         </div>
 
+        ${cfg.requireVerify && !u.email_verified ? `<div class="card grid"><h3>Confirm your email</h3><p class="note">We sent a confirmation link to <b>${esc(u.email)}</b>. You need to confirm it before you can pay. Check your spam folder too.</p><div class="row"><button type="button" class="btn small solid" id="resendV">Send again</button></div><div class="msg" id="mv"></div></div>` : ''}
+        ${approved && u.plan_ends_at ? `<div class="card between"><div><small class="label">Your plan</small><div><b>${esc(u.plan_name || 'Plan')}</b> <span class="note">ends ${esc(endsTxt)} (${left} day${left === 1 ? '' : 's'} left)</span></div></div><a class="btn small" href="#/plans">Add time</a></div>` : ''}
         ${showBot ? botDashboardHtml(u) : ''}
 
         ${showBot ? '' : approved
           ? '<div class="card done-card"><h3>Payment approved</h3><p class="note">Thank you. Your payment has been verified.</p></div>'
-          : `<form class="card grid" id="pay">
-              <h3>1. Payment</h3>
+          : `<div class="card grid" id="plansCard"><h3>1. Choose your plan</h3>${info.html}</div>
+            <details class="card" ${info.cur ? '' : 'open'}><summary>Pay with crypto instead</summary>
+            <form class="grid" id="pay">
               ${addr}
               <label>Network<input name="pay_network" required value="${esc(u.pay_network || cfg.payNetwork)}"></label>
               <label>Amount sent<input name="pay_amount" required value="${esc(u.pay_amount || cfg.payAmount)}"></label>
               <label>Transaction ID (hash)<input name="pay_proof" required minlength="8" value="${esc(u.pay_proof)}"></label>
               <div class="msg" id="m2"></div>
-              <button class="btn solid" type="submit">${paid && !rejected ? 'Update payment details' : 'Submit for review'}</button>
-            </form>`}
+              <button class="btn solid" type="submit">${paid && !rejected && !expired ? 'Update payment details' : 'Submit for review'}</button>
+            </form></details>`}
 
         ${showBot ? '' : `<form class="card grid ${approved ? '' : 'locked'}" id="acc">
           <div class="between"><h3>2. Your MT5 account</h3>${approved ? '' : '<span class="lock-tag">Locked</span>'}</div>
@@ -355,6 +510,15 @@
       };
     };
     bind('pay', 'm2', 'PUT', '/api/me/payment', 'Submitted for review');
+    const rv = document.getElementById('resendV');
+    if (rv) rv.onclick = async () => {
+      rv.disabled = true;
+      try { await api('POST', '/api/me/resend-verification', {}); toast('Confirmation email sent'); }
+      catch (err) { document.getElementById('mv').textContent = err.message; }
+      setTimeout(() => { rv.disabled = false; }, 30000);
+    };
+    const pc = document.getElementById('plansCard');
+    if (pc && info) bindPlans(pc, info);
     bind('acc', 'm1', 'PUT', '/api/me/account', 'MT5 details saved');
     const cancelEdit = document.getElementById('cancelEdit');
     if (cancelEdit) cancelEdit.onclick = () => { editAcc = false; viewDashboard(); };
@@ -368,7 +532,7 @@
   }
 
   // ---------- admin ----------
-  const TITLES = { approved: 'Approved (paid)', pending: 'Pending', rejected: 'Rejected' };
+  const TITLES = { approved: 'Approved (paid)', pending: 'Pending', expired: 'Expired', rejected: 'Rejected' };
 
   const field = (label, val) => `<div class="kv"><small>${label}</small><span>${val ? esc(val) : '<span class="note">Not provided</span>'}</span></div>`;
 
@@ -386,9 +550,12 @@
             ? `<span class="pwrow"><code class="pw">${MASK}</code><button class="btn small" data-act="reveal">Show</button></span>`
             : '<span class="note">Not provided</span>'}
         </div>
+        ${u.plan_ends_at ? field('Plan', `${u.plan_name || 'Plan'} until ${new Date(u.plan_ends_at).toLocaleDateString('en-GB')}`) : ''}
+        ${field('Email', u.email_verified ? 'Confirmed' : 'Not confirmed yet')}
         ${field('Registered', u.created_at)}
         ${u.admin_note ? field('Note', u.admin_note) : ''}
         <div class="actions">
+          ${u.email_verified ? '' : '<button class="btn small" data-act="verify">Mark email confirmed</button>'}
           ${u.status !== 'approved' ? '<button class="btn small green" data-act="approved">Approve</button>' : ''}
           ${u.status !== 'rejected' ? '<button class="btn small red" data-act="rejected">Reject</button>' : ''}
           ${u.status !== 'pending' ? '<button class="btn small" data-act="pending">Set pending</button>' : ''}
@@ -401,6 +568,9 @@
     if (!me) { location.hash = '#/login'; return; }
     if (me.role !== 'admin') { location.hash = '#/dashboard'; return; }
     let users = await api('GET', '/api/admin/users');
+    let planData = await api('GET', '/api/admin/plans');
+    let orders = await api('GET', '/api/admin/orders');
+    let mailInfo = await api('GET', '/api/admin/emails');
     await loadCfg();
     let filter = 'all';
     let q = '';
@@ -419,6 +589,10 @@
           <button class="btn solid small" type="submit">Save contact details</button>
         </form>
       </details>
+
+      <details class="card settings" id="plansAdmin"></details>
+      <details class="card settings" id="ordersAdmin"></details>
+      <details class="card settings" id="emailAdmin"></details>
 
       <div class="toolbar">
         <input type="search" id="q" placeholder="Search by email, MT5 login or WhatsApp" autocomplete="off">
@@ -443,20 +617,136 @@
         <div class="stat"><small>Total users</small><b>${users.length}</b></div>
         <div class="stat"><small>Approved</small><b>${cnt('approved')}</b></div>
         <div class="stat"><small>Awaiting review</small><b>${awaiting}</b></div>
+        <div class="stat"><small>Expired</small><b>${cnt('expired')}</b></div>
         <div class="stat"><small>Rejected</small><b>${cnt('rejected')}</b></div>`;
 
       const base = users.filter(matches);
       const n = (s) => base.filter((u) => u.status === s).length;
-      $chips.innerHTML = [['all', 'All', base.length], ['approved', 'Approved', n('approved')], ['pending', 'Pending', n('pending')], ['rejected', 'Rejected', n('rejected')]]
+      $chips.innerHTML = [['all', 'All', base.length], ['approved', 'Approved', n('approved')], ['pending', 'Pending', n('pending')], ['expired', 'Expired', n('expired')], ['rejected', 'Rejected', n('rejected')]]
         .map(([k, label, c]) => `<button type="button" class="chip ${filter === k ? 'active' : ''}" data-filter="${k}">${label} <span>${c}</span></button>`).join('');
 
-      const groups = filter === 'all' ? ['approved', 'pending', 'rejected'] : [filter];
+      const groups = filter === 'all' ? ['approved', 'pending', 'expired', 'rejected'] : [filter];
       $list.innerHTML = `<div class="grid cols ${filter === 'all' ? '' : 'single'}">${groups.map((g) => {
         const items = base.filter((u) => u.status === g);
         return `<section class="col ${g}"><h3>${TITLES[g]}<span>${items.length}</span></h3><div class="col-body">${items.map(userCard).join('') || '<p class="note">No users here.</p>'}</div></section>`;
       }).join('')}</div>`;
     }
     render();
+
+    // ----- plans & prices -----
+    const planRow = (p) => `
+      <form class="planform" data-id="${p ? p.id : ''}">
+        <input name="name" placeholder="Name" value="${p ? esc(p.name) : ''}" required>
+        <input name="days" inputmode="numeric" placeholder="Days" value="${p ? p.days : ''}" required>
+        <input name="price_usd" inputmode="decimal" placeholder="Price $" value="${p ? esc(p.price_usd) : ''}" required>
+        <input name="tax_usd" inputmode="decimal" placeholder="Tax $" value="${p ? esc(p.tax_usd) : '3'}">
+        <input name="note" placeholder="Note (optional)" value="${p ? esc(p.note) : ''}">
+        <label class="inline"><input type="checkbox" name="active" ${!p || p.active ? 'checked' : ''}> Shown</label>
+        <span class="row"><button class="btn small solid" type="submit">${p ? 'Save' : 'Add plan'}</button>${p ? '<button class="btn small danger" type="button" data-pdel="' + p.id + '">Delete</button>' : ''}</span>
+      </form>`;
+    function renderPlansAdmin() {
+      const $p = document.getElementById('plansAdmin');
+      const open = $p.open;
+      $p.innerHTML = `
+        <summary>Plans, prices and exchange rate</summary>
+        <p class="note">Prices are in US dollars. Customers pay the plan price plus tax, shown in UGX at the rate below (rounded up to the next 100).</p>
+        <form class="grid" id="rates">
+          <label>UGX for 1 US dollar<input name="UGX" inputmode="decimal" value="${esc(planData.rates.UGX)}" required></label>
+          <div class="msg" id="mr"></div>
+          <button class="btn small solid" type="submit">Save rate</button>
+        </form>
+        <h3 class="sec">Plans</h3>
+        ${planData.onlineReady ? '' : '<p class="note">MarzPay keys are not set on the server yet, so customers cannot pay online.</p>'}
+        <div class="planlist">${planData.plans.map(planRow).join('')}</div>
+        <h3 class="sec">Add a plan</h3>
+        ${planRow(null)}
+        <div class="msg" id="mpl"></div>`;
+      $p.open = open;
+      const reload = async () => { planData = await api('GET', '/api/admin/plans'); renderPlansAdmin(); };
+      $p.querySelector('#rates').onsubmit = async (e) => {
+        e.preventDefault();
+        try { await api('PUT', '/api/admin/rates', Object.fromEntries(new FormData(e.target))); toast('Rate saved'); await reload(); }
+        catch (err) { $p.querySelector('#mr').textContent = err.message; }
+      };
+      $p.querySelectorAll('form.planform').forEach((f) => {
+        f.onsubmit = async (e) => {
+          e.preventDefault();
+          const body = Object.fromEntries(new FormData(f));
+          body.active = f.querySelector('[name=active]').checked;
+          try {
+            await api(f.dataset.id ? 'PUT' : 'POST', '/api/admin/plans' + (f.dataset.id ? '/' + f.dataset.id : ''), body);
+            toast(f.dataset.id ? 'Plan saved' : 'Plan added');
+            await reload();
+          } catch (err) { $p.querySelector('#mpl').textContent = err.message; toast(err.message); }
+        };
+      });
+      $p.querySelectorAll('[data-pdel]').forEach((b) => {
+        b.onclick = async () => {
+          if (!confirm('Delete this plan? Past payments keep their record.')) return;
+          try { await api('DELETE', '/api/admin/plans/' + b.dataset.pdel, {}); toast('Plan deleted'); await reload(); }
+          catch (err) { toast(err.message); }
+        };
+      });
+    }
+    renderPlansAdmin();
+
+    // ----- online payments -----
+    function renderOrders() {
+      const $o = document.getElementById('ordersAdmin');
+      const open = $o.open;
+      const paidN = orders.filter((o) => o.status === 'PAID').length;
+      $o.innerHTML = `
+        <summary>Online payments <span class="note">(${orders.length} recent, ${paidN} paid)</span></summary>
+        ${orders.length ? orders.map((o) => `
+          <div class="order" data-oid="${o.id}">
+            <div class="between"><b>${esc(o.email || 'Deleted user')}</b><span class="badge ord-${esc(o.status.toLowerCase())}">${esc(o.status)}</span></div>
+            <div class="note">${esc(o.plan_name)} (${o.days} days) &middot; ${esc(o.currency)} ${money(o.charged)} ($${esc(o.total_usd)}) &middot; ${esc(o.phone || '')}</div>
+            <div class="note">${new Date(o.created_at).toLocaleString('en-GB')}${o.note ? ' &middot; ' + esc(o.note) : ''}</div>
+            ${o.status === 'PAID' ? '' : `<div class="actions"><button class="btn small" data-ocheck="${o.id}">Re-check with MarzPay</button><button class="btn small green" data-oapprove="${o.id}">Approve (money received)</button></div>`}
+          </div>`).join('') : '<p class="note">No online payments yet.</p>'}`;
+      $o.open = open;
+      const refresh = async () => { orders = await api('GET', '/api/admin/orders'); users = await api('GET', '/api/admin/users'); renderOrders(); render(); };
+      $o.querySelectorAll('[data-ocheck]').forEach((b) => {
+        b.onclick = async () => {
+          b.disabled = true;
+          try { const r = await api('POST', `/api/admin/orders/${b.dataset.ocheck}/recheck`, {}); toast('Status: ' + r.status); await refresh(); }
+          catch (err) { toast(err.message); b.disabled = false; }
+        };
+      });
+      $o.querySelectorAll('[data-oapprove]').forEach((b) => {
+        b.onclick = async () => {
+          if (!confirm('Only approve if you can see this money in your MarzPay wallet. Continue?')) return;
+          try { await api('POST', `/api/admin/orders/${b.dataset.oapprove}/approve`, {}); toast('Approved'); await refresh(); }
+          catch (err) { toast(err.message); }
+        };
+      });
+    }
+    renderOrders();
+
+    // ----- email -----
+    function renderEmailAdmin() {
+      const $e = document.getElementById('emailAdmin');
+      const open = $e.open;
+      const m = mailInfo;
+      $e.innerHTML = `
+        <summary>Emails <span class="note">(${m.enabled ? 'on' : 'not set up'})</span></summary>
+        ${m.enabled
+          ? `<p class="note">Sending as <b>${esc(m.from)}</b> through ${esc(m.provider)}. Admin alerts go to <b>${esc(m.notify || 'nobody (set ADMIN_NOTIFY_EMAIL)')}</b>. Clients ${m.requireVerify ? 'must confirm their email before paying' : 'do not need to confirm their email'}. Expiry checks by pinger: ${m.cron ? 'on' : 'off (set CRON_KEY)'}.</p>
+             <div class="row"><button type="button" class="btn small solid" id="mailTest">Send me a test email</button></div><div class="msg" id="mm"></div>`
+          : '<p class="note">Automatic emails are off. Add EMAIL_API_KEY and EMAIL_FROM in your host settings (see the README), then redeploy.</p>'}
+        <h3 class="sec">Recent emails</h3>
+        ${m.log.length ? m.log.map((l) => `<div class="order"><div class="between"><b>${esc(l.subject)}</b><span class="badge ord-${l.status === 'sent' ? 'paid' : 'failed'}">${esc(l.status)}</span></div><div class="note">${esc(l.to_email)} &middot; ${new Date(l.created_at).toLocaleString('en-GB')}${l.error ? ' &middot; ' + esc(l.error) : ''}</div></div>`).join('') : '<p class="note">None yet.</p>'}`;
+      $e.open = open;
+      const t = $e.querySelector('#mailTest');
+      if (t) t.onclick = async () => {
+        t.disabled = true;
+        try { const r = await api('POST', '/api/admin/email-test', {}); toast('Test sent to ' + r.to); }
+        catch (err) { $e.querySelector('#mm').textContent = err.message; }
+        mailInfo = await api('GET', '/api/admin/emails');
+        renderEmailAdmin();
+      };
+    }
+    renderEmailAdmin();
 
     document.getElementById('q').addEventListener('input', (e) => { q = e.target.value; render(); });
 
@@ -489,6 +779,11 @@
           b.dataset.shown = '1';
           clearTimeout(b._t);
           b._t = setTimeout(() => { if (b.isConnected) hide(); }, 30000);
+        } else if (act === 'verify') {
+          await api('POST', `/api/admin/users/${id}/verify`, {});
+          u.email_verified = true;
+          render();
+          toast('Marked as confirmed');
         } else if (act === 'delete') {
           if (!confirm(`Delete ${u.email}? This cannot be undone.`)) return;
           await api('DELETE', `/api/admin/users/${id}`, {});
@@ -501,9 +796,13 @@
             note = prompt('Reason for rejecting (optional)');
             if (note === null) return;
           }
-          await api('POST', `/api/admin/users/${id}/status`, { status: act, note });
-          u.status = act;
-          u.admin_note = note || null;
+          let days = '';
+          if (act === 'approved') {
+            days = prompt('Days of access from today? Leave blank for no end date.');
+            if (days === null) return;
+          }
+          await api('POST', `/api/admin/users/${id}/status`, { status: act, note, days });
+          users = await api('GET', '/api/admin/users');
           render();
           toast('Updated');
         }
@@ -514,6 +813,7 @@
   // ---------- router ----------
   async function route() {
     $app.onclick = null;
+    payRun++;
     chartStop();
     const r = location.hash.replace(/^#/, '') || '/';
     if (r !== '/dashboard') editAcc = false;
@@ -521,6 +821,12 @@
       renderNav();
       if (r === '/login') return authForm('login');
       if (r === '/register') return authForm('register');
+      if (r === '/forgot') return viewForgot();
+      if (r.startsWith('/reset/')) return viewReset(r.slice(7));
+      if (r === '/verified') return viewVerified(true);
+      if (r === '/verify-failed') return viewVerified(false);
+      if (r === '/plans') return await viewPlans();
+      if (r.startsWith('/pay/')) return await viewPay(r.slice(5));
       if (r === '/dashboard') return await viewDashboard();
       if (r === '/admin') return await viewAdmin();
       await loadCfg();

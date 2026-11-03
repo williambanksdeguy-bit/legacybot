@@ -150,3 +150,34 @@ input:disabled { opacity: .5; cursor: not-allowed; }
 .btn.go:hover:not(:disabled) { box-shadow: 0 6px 20px rgba(62,207,122,.3); }
 .btn.stop:hover:not(:disabled) { box-shadow: 0 6px 20px rgba(255,90,90,.3); }
 @keyframes blink { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1.15); } }
+
+.ver { text-align: center; color: var(--muted); font-size: 11px; padding: 0 16px 28px; opacity: .7; }
+
+/* ---- plans and payments ---- */
+.plans { display: grid; gap: 10px; }
+.plan { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; background: var(--card2); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+.plan.sel { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
+.plan b { font-size: 16px; display: block; }
+.plan small { display: block; }
+.plan .price { text-align: right; }
+.plan .price b { font-family: 'Barlow Condensed', sans-serif; font-size: 26px; color: var(--green); }
+.plan .btn { grid-column: 1 / -1; }
+.payform { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 14px; }
+details.card > summary { cursor: pointer; font-weight: 600; }
+details.card[open] > summary { margin-bottom: 12px; }
+.spin { width: 38px; height: 38px; margin: 8px auto; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--gold); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.badge.expired { color: var(--muted); }
+.col.expired { border-color: var(--line); }
+.col.expired > h3 { background: rgba(154,151,139,.14); color: var(--muted); }
+.badge.ord-paid { color: var(--green); } .badge.ord-pending { color: var(--amber); }
+.badge.ord-failed, .badge.ord-expired { color: var(--red); }
+.planlist { display: grid; gap: 10px; margin-bottom: 14px; }
+.planform { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; align-items: end; background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+.planform .row { grid-column: 1 / -1; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg label.inline { background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; cursor: pointer; }
+.seg label.inline:has(input:checked) { border-color: var(--gold); color: var(--gold); }
+label.inline { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 13px; }
+label.inline input { width: auto; }
+.order { background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 10px; word-break: break-word; }
