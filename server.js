@@ -120,6 +120,17 @@ async function init() {
     await q('UPDATE users SET email_verified_at = now() WHERE email_verified_at IS NULL');
     await setSetting('email_verify_migrated', '1');
   }
+  // Phone number (required at sign-up) and one-time email codes for sign-up / login
+  await q('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT');
+  await q(`
+    CREATE TABLE IF NOT EXISTS login_codes (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      purpose TEXT NOT NULL, code_hash TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
   await q(`
     CREATE TABLE IF NOT EXISTS plans (
       id SERIAL PRIMARY KEY,
@@ -239,7 +250,7 @@ function publicUser(u) {
     broker: u.broker, mt5_login: u.mt5_login, mt5_server: u.mt5_server,
     has_investor_password: !!u.mt5_investor_enc,
     pay_network: u.pay_network, pay_amount: u.pay_amount, pay_proof: u.pay_proof,
-    whatsapp: u.whatsapp, admin_note: u.admin_note, created_at: u.created_at,
+    whatsapp: u.whatsapp, phone: u.phone, admin_note: u.admin_note, created_at: u.created_at,
     bot_running: !!u.bot_running,
     email_verified: !!u.email_verified_at,
     plan_name: u.plan_name || null,
@@ -300,6 +311,28 @@ async function sendVerification(u, req) {
 // Buying needs a confirmed email, but only when email is set up (otherwise nobody could ever confirm)
 const needsVerify = (u) => mailer.configured() && process.env.REQUIRE_EMAIL_VERIFY !== 'off' && !u.email_verified_at;
 const VERIFY_MSG = 'Please confirm your email first. Check your inbox (and spam) for our message, or press "Send again" on your dashboard.';
+
+
+// ---- email codes (2-step sign-in) ----
+// Needs email to be set up; REQUIRE_2FA=off turns it off. Codes: 6 digits, 10 minutes, 5 tries, stored hashed.
+const twoFactorOn = () => mailer.configured() && process.env.REQUIRE_2FA !== 'off';
+const CODE_MINUTES = 10, CODE_TRIES = 5, CODE_COOLDOWN_S = 60;
+const codeHash = (userId, code) => sha(`${JWT_SECRET}:${userId}:${code}`);
+function challengeToken(userId, purpose) { return jwt.sign({ id: userId, purpose, c: 1 }, JWT_SECRET, { expiresIn: CODE_MINUTES * 60 }); }
+function readChallenge(tok) {
+  try { const p = jwt.verify(String(tok || ''), JWT_SECRET); return p.c === 1 ? p : null; } catch { return null; }
+}
+// Returns false if a code was sent less than a minute ago
+async function issueCode(user, purpose) {
+  const recent = await q("SELECT 1 FROM login_codes WHERE user_id=$1 AND created_at > now() - make_interval(secs => $2::int)", [user.id, CODE_COOLDOWN_S]);
+  if (recent.rowCount) return false;
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  await q('UPDATE login_codes SET used_at=now() WHERE user_id=$1 AND used_at IS NULL', [user.id]);
+  await q('INSERT INTO login_codes (user_id, purpose, code_hash, expires_at) VALUES ($1,$2,$3, now() + make_interval(mins => $4::int))', [user.id, purpose, codeHash(user.id, code), CODE_MINUTES]);
+  const r = await sendMail(user.email, T.code({ code, minutes: CODE_MINUTES, purpose }));
+  if (!r.ok) console.error('code email failed:', r.error);
+  return true;
+}
 
 // ---- online payments (MarzPay) ----
 const lastPoll = new Map(); // order id -> ms of the last MarzPay lookup, so a polling browser cannot hammer the API
@@ -445,18 +478,21 @@ app.get('/api/webhooks/marzpay', ah(async (req, res) => {
 app.post('/api/register', authLimiter, ah(async (req, res) => {
   const email = clean(req.body.email, 200).toLowerCase();
   const password = String(req.body.password || '');
+  const phone = digits(clean(req.body.phone, 30));
   if (!emailOk(email)) return res.status(400).json({ error: 'Enter a valid email' });
   if (password.length < 10) return res.status(400).json({ error: 'Password must be at least 10 characters' });
-  const r = await q('INSERT INTO users (email, pass_hash) VALUES ($1,$2) ON CONFLICT (email) DO NOTHING RETURNING id',
-    [email, bcrypt.hashSync(password, 12)]);
+  if (phone === '' || !phoneOk(phone)) return res.status(400).json({ error: 'Enter your phone number with country code, e.g. +256700000000' });
+  const r = await q('INSERT INTO users (email, pass_hash, phone) VALUES ($1,$2,$3) ON CONFLICT (email) DO NOTHING RETURNING id',
+    [email, bcrypt.hashSync(password, 12), phone]);
   if (!r.rowCount) return res.status(409).json({ error: 'Email already registered' });
-  if (mailer.configured()) {
-    sendVerification({ id: r.rows[0].id, email }, req).catch((e) => console.error('verification email failed', e.message));
-    fire(adminEmail(), T.adminSignup({ email }));
-  } else {
-    await q('UPDATE users SET email_verified_at=now() WHERE id=$1', [r.rows[0].id]); // no email service: nothing to confirm
+  const user = { id: r.rows[0].id, email, role: 'user' };
+  if (mailer.configured()) fire(adminEmail(), T.adminSignup({ email }));
+  if (twoFactorOn()) {
+    await issueCode(user, 'register');
+    return res.json({ ok: true, need_code: true, challenge: challengeToken(user.id, 'register'), email });
   }
-  setSession(res, { id: r.rows[0].id, role: 'user' });
+  await q('UPDATE users SET email_verified_at=now() WHERE id=$1', [user.id]); // no email service: nothing to confirm
+  setSession(res, user);
   res.json({ ok: true, role: 'user' });
 }));
 
@@ -467,8 +503,43 @@ app.post('/api/login', authLimiter, ah(async (req, res) => {
   if (!u || !bcrypt.compareSync(String(req.body.password || ''), u.pass_hash)) {
     return res.status(401).json({ error: 'Wrong email or password' });
   }
+  if (twoFactorOn()) {
+    await issueCode(u, 'login');
+    return res.json({ ok: true, need_code: true, challenge: challengeToken(u.id, 'login'), email: u.email });
+  }
   setSession(res, u);
   res.json({ ok: true, role: u.role });
+}));
+
+// Step 2: the 6-digit code from the email
+app.post('/api/verify-code', authLimiter, ah(async (req, res) => {
+  const ch = readChallenge(req.body.challenge);
+  if (!ch) return res.status(401).json({ error: 'This sign-in has expired. Please start again.' });
+  const code = digits(req.body.code);
+  const { rows } = await q('SELECT * FROM login_codes WHERE user_id=$1 AND used_at IS NULL AND expires_at > now() ORDER BY id DESC LIMIT 1', [ch.id]);
+  const row = rows[0];
+  if (!row || row.attempts >= CODE_TRIES) return res.status(401).json({ error: 'That code has expired or was used too many times. Press "Send a new code".' });
+  const ok = code.length === 6 && crypto.timingSafeEqual(Buffer.from(codeHash(ch.id, code)), Buffer.from(row.code_hash));
+  if (!ok) {
+    await q('UPDATE login_codes SET attempts = attempts + 1 WHERE id=$1', [row.id]);
+    return res.status(401).json({ error: 'Wrong code. Check the latest email and try again.' });
+  }
+  const used = await q('UPDATE login_codes SET used_at=now() WHERE id=$1 AND used_at IS NULL RETURNING id', [row.id]);
+  if (!used.rowCount) return res.status(401).json({ error: 'That code was already used.' });
+  const u = (await q('SELECT * FROM users WHERE id=$1', [ch.id])).rows[0];
+  if (!u) return res.status(401).json({ error: 'Account not found' });
+  if (!u.email_verified_at) await q('UPDATE users SET email_verified_at=now() WHERE id=$1', [u.id]); // a working code proves the inbox
+  setSession(res, u);
+  res.json({ ok: true, role: u.role });
+}));
+
+app.post('/api/resend-code', authLimiter, ah(async (req, res) => {
+  const ch = readChallenge(req.body.challenge);
+  if (!ch) return res.status(401).json({ error: 'This sign-in has expired. Please start again.' });
+  const u = (await q('SELECT id, email FROM users WHERE id=$1', [ch.id])).rows[0];
+  if (!u) return res.status(401).json({ error: 'Account not found' });
+  const sent = await issueCode(u, ch.purpose);
+  res.json(sent ? { ok: true } : { ok: false, error: `Please wait ${CODE_COOLDOWN_S} seconds before asking for another code.` });
 }));
 
 app.post('/api/logout', (_req, res) => { res.clearCookie('lb_session'); res.json({ ok: true }); });

@@ -79,6 +79,18 @@ const templates = {
     text: `Welcome to Legacy Bot. Confirm your email to finish setting up your account (link works for 48 hours):\n${link}\n\nIf you did not create this account, ignore this email.`,
   }),
 
+  code: ({ code, minutes, purpose }) => ({
+    subject: `${code} is your Legacy Bot code`,
+    html: layout({
+      heading: purpose === 'register' ? 'Confirm your email' : 'Your sign-in code',
+      body: p(purpose === 'register' ? 'Enter this code to finish creating your account.' : 'Enter this code to finish signing in.')
+        + `<p style="margin:18px 0;font-size:32px;letter-spacing:.3em;font-weight:700">${esc(code)}</p>`
+        + p(`It works for ${esc(String(minutes))} minutes and only once. Never share it with anyone.`),
+      foot: 'If you did not try to sign in, ignore this email and consider changing your password.',
+    }),
+    text: `Your Legacy Bot code is ${code}. It works for ${minutes} minutes and only once. Never share it. If this was not you, ignore this email.`,
+  }),
+
   receipt: ({ plan, days, amount, currency, method, endsAt, link }) => ({
     subject: `Payment received - ${plan}`,
     html: layout({

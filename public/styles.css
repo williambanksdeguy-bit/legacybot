@@ -181,3 +181,18 @@ details.card[open] > summary { margin-bottom: 12px; }
 label.inline { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 13px; }
 label.inline input { width: auto; }
 .order { background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-top: 10px; word-break: break-word; }
+
+/* ---- watermark artwork (faint, decorative) ---- */
+body { background: transparent; }
+html { background: radial-gradient(1200px 500px at 50% -200px, rgba(245,197,66,.10), transparent), var(--bg); }
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: url('/img/bg-market.webp') center / cover no-repeat; opacity: .09; filter: grayscale(1) contrast(1.1); }
+.hero { position: relative; margin: 0 -16px; padding: 84px 16px 54px; overflow: hidden; isolation: isolate; }
+.hero::before { content: ""; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(180deg, rgba(11,11,13,.55), var(--bg) 96%), url('/img/hero.webp') center 30% / cover no-repeat; opacity: .55; }
+.form.card { position: relative; overflow: hidden; isolation: isolate; }
+.form.card::before { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: url('/img/card-a.webp') center / cover no-repeat; opacity: .07; filter: grayscale(1); }
+.plans { position: relative; }
+@media (prefers-reduced-motion: no-preference) { .hero::before { animation: drift 40s ease-in-out infinite alternate; } }
+@keyframes drift { from { transform: scale(1); } to { transform: scale(1.06); } }

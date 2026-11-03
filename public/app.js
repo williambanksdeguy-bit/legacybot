@@ -75,6 +75,7 @@
       <form class="form card" id="f">
         <h2>${isReg ? 'Create account' : 'Welcome back'}</h2>
         <label>Email<input type="email" name="email" required autocomplete="email"></label>
+        ${isReg ? '<label>Phone number (with country code)<input type="tel" name="phone" required inputmode="tel" autocomplete="tel" placeholder="+256700000000"></label><span class="note">We use it to contact you about your account and plan. We do not share it.</span>' : ''}
         <label>Password<input type="password" name="password" required minlength="${isReg ? 10 : 1}" autocomplete="${isReg ? 'new-password' : 'current-password'}"></label>
         ${isReg ? '<span class="note">At least 10 characters.</span>' : ''}
         <div class="msg" id="msg"></div>
@@ -85,11 +86,43 @@
     document.getElementById('f').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const body = { email: fd.get('email'), password: fd.get('password') };
+      if (isReg) body.phone = fd.get('phone');
       try {
-        const r = await api('POST', '/api/' + kind, { email: fd.get('email'), password: fd.get('password') });
+        const r = await api('POST', '/api/' + kind, body);
+        if (r.need_code) return codeForm(r.challenge, r.email);
         await loadMe();
         location.hash = r.role === 'admin' ? '#/admin' : '#/dashboard';
       } catch (err) { document.getElementById('msg').textContent = err.message; }
+    };
+  }
+
+  // Step 2 of sign-up and every login: the 6-digit code that was emailed
+  function codeForm(challenge, email) {
+    $app.innerHTML = `
+      <form class="form card" id="cf">
+        <h2>Check your email</h2>
+        <p class="note">We sent a 6-digit code to <b>${esc(email)}</b>. It works for 10 minutes. Check your spam folder too.</p>
+        <label>Code<input name="code" required inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="123456"></label>
+        <div class="msg" id="cmsg"></div>
+        <button class="btn solid" type="submit">Verify</button>
+        <button class="btn small" type="button" id="resend">Send a new code</button>
+        <a href="#/login" class="note">Start again</a>
+      </form>`;
+    const msg = document.getElementById('cmsg');
+    document.getElementById('cf').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const r = await api('POST', '/api/verify-code', { challenge, code: new FormData(e.target).get('code') });
+        await loadMe();
+        location.hash = r.role === 'admin' ? '#/admin' : '#/dashboard';
+      } catch (err) { msg.textContent = err.message; }
+    };
+    document.getElementById('resend').onclick = async () => {
+      try {
+        const r = await api('POST', '/api/resend-code', { challenge });
+        msg.textContent = r.ok ? 'A new code is on its way.' : r.error;
+      } catch (err) { msg.textContent = err.message; }
     };
   }
 
@@ -554,6 +587,7 @@
     return `
       <div class="user" data-id="${u.id}">
         <div class="between"><div class="em">${esc(u.email)}</div><span class="badge ${esc(u.status)}">${esc(u.status)}</span></div>
+        ${u.phone ? `<div class="kv"><small>Phone</small><span>+${esc(digitsOnly(u.phone))}</span></div>` : ''}
         ${wa ? `<div class="kv"><small>WhatsApp</small><a href="https://wa.me/${wa}" target="_blank" rel="noopener noreferrer">+${wa}</a></div>` : ''}
         ${field('Payment proof', u.pay_proof || 'No transaction submitted')}
         ${u.pay_proof ? field('Network / amount', `${u.pay_network || ''} / ${u.pay_amount || ''}`) : ''}
@@ -620,7 +654,7 @@
     const matches = (u) => {
       const t = q.trim().toLowerCase();
       if (!t) return true;
-      return [u.email, u.mt5_login, u.whatsapp].some((v) => String(v || '').toLowerCase().includes(t));
+      return [u.email, u.mt5_login, u.whatsapp, u.phone].some((v) => String(v || '').toLowerCase().includes(t));
     };
 
     function render() {

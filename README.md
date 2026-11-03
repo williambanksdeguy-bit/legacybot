@@ -48,6 +48,11 @@ Setup (about 15 minutes):
 
 If the emails do not arrive, check spam first, then the Emails list in the admin panel (it shows the provider's error).
 
+## Email codes (2-step sign-in) and phone number
+- With email set up (above), sign-up and **every login** ask for a 6-digit code sent to the client's email. Codes last 10 minutes, work once, allow 5 wrong tries, and a new one can be sent after 60 seconds. A working sign-up code also confirms the email.
+- `REQUIRE_2FA=off` switches this off. It is also off automatically while email is not set up (otherwise nobody could log in), so finish the email setup before going live.
+- A phone number is required at sign-up and shown on each client's card in the admin panel (and searchable). Only contact people about their own account and plan, and keep to the privacy rules of the countries you sell in.
+
 ## Plans and online payments
 - Admin panel > **Plans, prices and exchange rate**: add, edit, hide or delete plans. Prices are in US dollars plus a tax amount. Set **UGX for 1 US dollar**; customers are charged the converted amount, rounded up to the next 100. Check the rate when you first deploy (it starts at 4200).
 - A client picks a plan, enters a mobile money number, and approves the prompt on their phone. The server asks MarzPay whether the payment really succeeded (it never trusts the webhook alone, or the browser), then approves the client and adds the days. Repeat payments add time on top of what is left.

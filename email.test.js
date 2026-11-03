@@ -58,3 +58,11 @@ test('text from users cannot inject HTML into emails', () => {
 test('no link means no broken button', () => {
   assert.ok(!T.expired({ link: '' }).html.includes('<a href'));
 });
+
+test('sign-in code email shows the code, expiry and a plain-text copy', () => {
+  const m = T.code({ code: '042917', minutes: 10, purpose: 'login' });
+  assert.match(m.subject, /042917/);
+  assert.match(m.html, /042917/);
+  assert.match(m.text, /10 minutes/);
+  assert.match(T.code({ code: '111111', minutes: 10, purpose: 'register' }).html, /finish creating your account/);
+});

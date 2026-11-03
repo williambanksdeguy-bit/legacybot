@@ -37,8 +37,9 @@ const server = app.listen(0, async () => {
   };
   try {
     assert.equal((await call('u', 'GET', '/api/me')).status, 401, 'me requires login');
-    assert.equal((await call('u', 'POST', '/api/register', { email: 'a@b.com', password: 'short' })).status, 400);
-    assert.equal((await call('u', 'POST', '/api/register', { email: 'a@b.com', password: 'longenough123' })).status, 200);
+    assert.equal((await call('u', 'POST', '/api/register', { email: 'a@b.com', password: 'short', phone: '+256700000111' })).status, 400);
+    assert.equal((await call('u', 'POST', '/api/register', { email: 'a@b.com', password: 'longenough123' })).status, 400, 'phone is required');
+    assert.equal((await call('u', 'POST', '/api/register', { email: 'a@b.com', password: 'longenough123', phone: '+256700000111' })).status, 200);
 
     // MT5 details are locked until the payment is approved
     const acct = { broker: 'exness', mt5_login: '484054192', mt5_server: 'Exness-MT5Real35', mt5_investor: 'invpass1' };
