@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createHmac } = require('crypto');
-const { parseMoneyCents, centsToStr, parseRate, localCharge, normalizeUgPhone, acceptPayment } = require('./pricing');
+const { MARKETS, normalizePhone, parseMoneyCents, centsToStr, parseRate, localCharge, normalizeUgPhone, acceptPayment } = require('./pricing');
 const { parseMomo, verifySignature } = require('./marz');
 
 test('money parsing', () => {
@@ -35,6 +35,30 @@ test('Uganda phone numbers', () => {
   assert.equal(normalizeUgPhone('+256 772-123-456'), '+256772123456');
   assert.equal(normalizeUgPhone('256772123456'), '+256772123456');
   for (const bad of ['', '12345', '0172123456', '+254712345678', '07721234567', 'abc']) assert.equal(normalizeUgPhone(bad), null, bad);
+});
+
+test('phone numbers for other countries', () => {
+  assert.equal(normalizePhone('KE', '0712 345 678'), '+254712345678');
+  assert.equal(normalizePhone('KE', '+254 112 345 678'), '+254112345678');
+  assert.equal(normalizePhone('KE', '0212345678'), null);
+  assert.equal(normalizePhone('RW', '0788123456'), '+250788123456');
+  assert.equal(normalizePhone('RW', '+250788123456'), '+250788123456');
+  assert.equal(normalizePhone('ZM', '0971234567'), '+260971234567');
+  assert.equal(normalizePhone('SN', '+221 77 123 45 67'), '+221771234567');
+  assert.equal(normalizePhone('SN', '12'), null);
+  assert.equal(normalizePhone('XX', '0771234567'), null, 'unknown country');
+  assert.equal(normalizePhone('UG', '+254712345678'), null, 'a Kenyan number is not valid for Uganda');
+});
+
+test('every country has a currency, a country code and a charge step', () => {
+  for (const [code, m] of Object.entries(MARKETS)) {
+    assert.match(code, /^[A-Z]{2}$/);
+    assert.match(m.currency, /^[A-Z]{3}$/);
+    assert.match(m.dial, /^\d{2,3}$/);
+    assert.ok(m.step >= 1 && m.example);
+  }
+  assert.equal(MARKETS.TZ, undefined, 'MarzPay does not list Tanzania');
+  assert.equal(localCharge(3300, 129.5, MARKETS.KE.step), 4274, '$33 at 129.5 KES rounds up to a whole shilling');
 });
 
 const order = { reference: 'LBABC123', currency: 'UGX', charged: 122100 };

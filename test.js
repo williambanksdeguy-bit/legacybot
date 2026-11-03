@@ -102,8 +102,8 @@ const server = app.listen(0, async () => {
     assert.equal(added.status, 200);
     assert.equal((await call('a', 'PUT', `/api/admin/plans/${added.data.id}`, { name: 'Test', days: 7, price_usd: '12', tax_usd: '1', active: false })).status, 200);
     assert.equal((await call('u', 'GET', '/api/plans')).data.plans.some((p) => p.name === 'Test'), false, 'hidden plans are not shown to clients');
-    assert.equal((await call('a', 'PUT', '/api/admin/rates', { UGX: 'abc' })).status, 400);
-    assert.equal((await call('a', 'PUT', '/api/admin/rates', { UGX: '3800' })).status, 200);
+    assert.equal((await call('a', 'PUT', '/api/admin/rates', { UG: 'abc' })).status, 400);
+    assert.equal((await call('a', 'PUT', '/api/admin/rates', { UG: '3800' })).status, 200);
     assert.equal((await call('a', 'DELETE', `/api/admin/plans/${added.data.id}`, {})).status, 200);
     // no MarzPay keys in the test environment: paying online is refused cleanly
     assert.equal((await call('u', 'POST', '/api/me/pay', { plan_id: pl.plans[0].id, phone: '0772123456' })).status, 503);

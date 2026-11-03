@@ -55,7 +55,10 @@ If the emails do not arrive, check spam first, then the Emails list in the admin
 - Admin panel > **Online payments** shows every attempt, with **Re-check** and **Approve** for stuck ones. Only approve after you see the money in your MarzPay wallet.
 - Crypto still works: you approve by hand and can enter the number of days (blank = no end date).
 - Customers can choose **mobile money** or **Visa/Mastercard**. Card sends them to MarzPay's secure card page and back; it needs card collection to be enabled on your MarzPay account (if MarzPay refuses it, the customer sees the error and can use mobile money). Set `CARD_PAYMENTS=off` to hide the card choice.
-- Only UGX is switched on. MarzPay's card API takes UGX amounts only. Kenya (KES, M-Pesa) exists in MarzPay's docs and could be added; TZS is not listed by MarzPay.
+- **Countries:** mobile money works in the 12 countries MarzPay lists (Uganda, Kenya, Rwanda, DR Congo, Zambia, Cameroon, Senegal, Cote d'Ivoire, Benin, Gabon, Congo-Brazzaville, Sierra Leone). In Admin > Plans, prices, countries and exchange rates, type how much local money 1 US dollar costs to switch a country on; leave it blank to switch it off. Only Uganda is on to start (4200). Customers pick their country when they pay and are charged in that country's currency.
+- Card payments are always charged in UGX (MarzPay's card API takes UGX only), so keep Uganda switched on if you want card.
+- MarzPay says Kenya, Rwanda and DR Congo have their own limits, and does not state minimum amounts for most countries. If a payment is refused, the reason shows on the payment in Admin > Online payments. If MarzPay reports a different currency code than expected, the payment is held with a note and you can approve it by hand after seeing the money.
+- Tanzania (TZS) is not offered by MarzPay.
 - Every payment's reference is a random UUID, as MarzPay requires.
 - This only flips the `bot_running` flag. Nothing here trades by itself.
 - Free hosting that sleeps can delay the payment callback; the client's page also checks MarzPay every few seconds, so payments still complete.

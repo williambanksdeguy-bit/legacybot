@@ -11,7 +11,7 @@ const { Pool } = require('pg');
 const marz = require('./marz');
 const mailer = require('./email');
 const T = mailer.templates;
-const { CURRENCIES, parseMoneyCents, centsToStr, parseRate, localCharge, normalizeUgPhone, acceptPayment, PENDING_MINUTES } = require('./pricing');
+const { MARKETS, normalizePhone, parseMoneyCents, centsToStr, parseRate, localCharge, acceptPayment, PENDING_MINUTES } = require('./pricing');
 
 // ---- optional .env loader (no extra dependency) ----
 const envFile = path.join(__dirname, '.env');
@@ -146,7 +146,10 @@ async function init() {
       await q('INSERT INTO plans (name, days, price_cents, tax_cents, sort) VALUES ($1,$2,$3,300,$4)', [name, days, price, i]);
     }
   }
-  await q("INSERT INTO settings (key, value) VALUES ('rate_UGX', '4200') ON CONFLICT (key) DO NOTHING");
+  await q("ALTER TABLE orders ADD COLUMN IF NOT EXISTS country TEXT NOT NULL DEFAULT 'UG'");
+  // Rates are kept per country now (rate_UG, rate_KE ...). Carry over an older rate_UGX, otherwise start Uganda at 4200.
+  const oldUg = await getSetting('rate_UGX', '');
+  await q("INSERT INTO settings (key, value) VALUES ('rate_UG', $1) ON CONFLICT (key) DO NOTHING", [oldUg || '4200']);
   const admin = await q("SELECT 1 FROM users WHERE role='admin' LIMIT 1");
   if (!admin.rowCount && process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
     await q("INSERT INTO users (email, pass_hash, role, status, email_verified_at) VALUES ($1,$2,'admin','approved', now()) ON CONFLICT (email) DO NOTHING",
@@ -360,6 +363,17 @@ async function checkOrder(id, { force = false } = {}) {
   return get();
 }
 
+// Rate per country, as numbers (or as the saved text when raw = true). Only countries with a rate are switched on.
+async function countryRates(raw = false) {
+  const out = {};
+  for (const code of Object.keys(MARKETS)) {
+    const v = await getSetting('rate_' + code, '');
+    const n = parseRate(v);
+    if (n) out[code] = raw ? v : n;
+  }
+  return out;
+}
+
 function parsePlan(b) {
   const name = clean(b.name, 60);
   const days = /^\d{1,4}$/.test(String(b.days ?? '').trim()) ? Number(String(b.days).trim()) : 0;
@@ -389,19 +403,19 @@ app.get('/api/config', ah(async (_req, res) => {
 // Plans with their local-currency prices (public, so the plans can be shown before sign-up)
 app.get('/api/plans', ah(async (_req, res) => {
   const { rows } = await q('SELECT * FROM plans WHERE active ORDER BY sort, id');
-  const online = [];
-  const rates = {};
-  for (const cur of Object.keys(CURRENCIES)) {
-    const rate = parseRate(await getSetting('rate_' + cur, ''));
-    if (rate) { rates[cur] = rate; if (marz.configured()) online.push(cur); }
-  }
+  const rates = await countryRates();
+  const markets = marz.configured()
+    ? Object.entries(MARKETS).filter(([code]) => rates[code]).map(([code, m]) => ({ code, name: m.name, currency: m.currency, example: m.example }))
+    : [];
+  // Card collection is UGX only, so it is offered only while Uganda is switched on
+  const cardOk = markets.some((m) => m.code === 'UG') && process.env.CARD_PAYMENTS !== 'off';
   res.json({
-    currencies: online,
-    methods: online.length ? (process.env.CARD_PAYMENTS === 'off' ? ['mobile_money'] : ['mobile_money', 'card']) : [],
+    markets,
+    methods: markets.length ? (cardOk ? ['mobile_money', 'card'] : ['mobile_money']) : [],
     plans: rows.map((p) => {
       const total = p.price_cents + p.tax_cents;
       const prices = {};
-      for (const cur of online) prices[cur] = localCharge(total, rates[cur], CURRENCIES[cur].step);
+      for (const m of markets) prices[m.code] = localCharge(total, rates[m.code], MARKETS[m.code].step);
       return { id: p.id, name: p.name, days: p.days, note: p.note, price_usd: centsToStr(p.price_cents), tax_usd: centsToStr(p.tax_cents), total_usd: centsToStr(total), prices };
     }),
   });
@@ -544,17 +558,19 @@ app.post('/api/me/pay', auth, ah(async (req, res) => {
   if (!marz.configured()) return res.status(503).json({ error: 'Online payments are not switched on yet. Use crypto or contact us.' });
   if (needsVerify(req.user)) return res.status(403).json({ error: VERIFY_MSG });
   const planId = /^\d{1,9}$/.test(String(req.body.plan_id ?? '')) ? Number(req.body.plan_id) : null;
-  const currency = String(req.body.currency || 'UGX').toUpperCase();
-  const cur = CURRENCIES[currency];
-  if (!cur) return res.status(400).json({ error: 'That currency is not available' });
   const method = req.body.method === 'card' ? 'card' : 'mobile_money';
   if (method === 'card' && process.env.CARD_PAYMENTS === 'off') return res.status(400).json({ error: 'Card payments are not available' });
-  const phone = method === 'card' ? null : normalizeUgPhone(req.body.phone);
-  if (method === 'mobile_money' && !phone) return res.status(400).json({ error: 'Enter a Ugandan mobile number, like 0772 123 456' });
+  // Card is always charged in UGX; mobile money in the customer's own country
+  const country = method === 'card' ? 'UG' : String(req.body.country || 'UG').toUpperCase();
+  const cur = MARKETS[country];
+  if (!cur) return res.status(400).json({ error: 'That country is not available' });
+  const currency = cur.currency;
+  const phone = method === 'card' ? null : normalizePhone(country, req.body.phone);
+  if (method === 'mobile_money' && !phone) return res.status(400).json({ error: `Enter a ${cur.name} mobile number, like ${cur.example}` });
   const plan = planId === null ? null : (await q('SELECT * FROM plans WHERE id=$1 AND active', [planId])).rows[0];
   if (!plan) return res.status(404).json({ error: 'That plan is not available' });
-  const rate = parseRate(await getSetting('rate_' + currency, ''));
-  if (!rate) return res.status(503).json({ error: 'Prices are not ready yet. Please try again later.' });
+  const rate = parseRate(await getSetting('rate_' + country, ''));
+  if (!rate) return res.status(400).json({ error: `Payments from ${cur.name} are not switched on` });
 
   const recent = await q("SELECT COUNT(*)::int AS n FROM orders WHERE user_id=$1 AND created_at > now() - interval '1 hour'", [req.user.id]);
   if (recent.rows[0].n >= 6) return res.status(429).json({ error: 'Too many payment attempts. Try again in a while.' });
@@ -563,14 +579,14 @@ app.post('/api/me/pay', auth, ah(async (req, res) => {
   const charged = localCharge(total, rate, cur.step);
   const reference = crypto.randomUUID(); // MarzPay wants a UUID here
   const ins = await q(
-    `INSERT INTO orders (user_id, email, plan_id, plan_name, days, currency, total_cents, rate, charged, phone, reference, method)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-    [req.user.id, req.user.email, plan.id, plan.name, plan.days, currency, total, rate, charged, phone, reference, method]);
+    `INSERT INTO orders (user_id, email, plan_id, plan_name, days, currency, total_cents, rate, charged, phone, reference, method, country)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+    [req.user.id, req.user.email, plan.id, plan.name, plan.days, currency, total, rate, charged, phone, reference, method, country]);
   const orderId = ins.rows[0].id;
 
   const base = process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : `${req.protocol}://${req.get('host')}`;
   const r = await marz.createCollection({
-    amount: charged, phone, country: cur.country, reference, method,
+    amount: charged, phone, country, reference, method,
     description: `Legacy Bot - ${plan.name}`.slice(0, 80), callbackUrl: `${base}/api/webhooks/marzpay?ref=${reference}`,
   });
   if (!r.ok) {
@@ -675,10 +691,10 @@ app.put('/api/admin/settings', auth, adminOnly, ah(async (req, res) => {
 // Plans and prices
 app.get('/api/admin/plans', auth, adminOnly, ah(async (_req, res) => {
   const { rows } = await q('SELECT * FROM plans ORDER BY sort, id');
-  const rates = {};
-  for (const cur of Object.keys(CURRENCIES)) rates[cur] = await getSetting('rate_' + cur, '');
+  const rates = await countryRates(true);
   res.json({
-    rates, onlineReady: marz.configured(),
+    markets: Object.entries(MARKETS).map(([code, m]) => ({ code, name: m.name, currency: m.currency, rate: rates[code] || '' })),
+    onlineReady: marz.configured(),
     plans: rows.map((p) => ({ id: p.id, name: p.name, days: p.days, price_usd: centsToStr(p.price_cents), tax_usd: centsToStr(p.tax_cents), note: p.note || '', active: p.active, sort: p.sort })),
   });
 }));
@@ -715,21 +731,25 @@ app.delete('/api/admin/plans/:id', auth, adminOnly, ah(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// Exchange rate: how many UGX one US dollar costs. Plan prices are in dollars and are converted with this.
+// Exchange rates: how much local money one US dollar costs, per country. A rate switches that country on; blank switches it off.
 app.put('/api/admin/rates', auth, adminOnly, ah(async (req, res) => {
-  for (const cur of Object.keys(CURRENCIES)) {
-    if (req.body[cur] === undefined) continue;
-    const rate = parseRate(req.body[cur]);
-    if (rate === null) return res.status(400).json({ error: `Enter the ${cur} rate as a number, like 3700` });
-    await setSetting('rate_' + cur, String(rate));
+  const todo = [];
+  for (const code of Object.keys(MARKETS)) {
+    if (req.body[code] === undefined) continue;
+    const raw = String(req.body[code]).trim();
+    if (raw === '') { todo.push([code, '']); continue; }
+    const rate = parseRate(raw);
+    if (rate === null) return res.status(400).json({ error: `Enter the ${MARKETS[code].name} rate as a number, like 4200` });
+    todo.push([code, String(rate)]);
   }
+  for (const [code, v] of todo) await setSetting('rate_' + code, v);
   await audit(req, 'update_rates');
   res.json({ ok: true });
 }));
 
 // Online payments, newest first
 app.get('/api/admin/orders', auth, adminOnly, ah(async (_req, res) => {
-  const { rows } = await q('SELECT id, user_id, email, plan_name, days, currency, total_cents, charged, phone, status, note, last_check, created_at, paid_at FROM orders ORDER BY id DESC LIMIT 200');
+  const { rows } = await q('SELECT id, user_id, email, plan_name, days, country, currency, total_cents, charged, phone, status, note, last_check, created_at, paid_at FROM orders ORDER BY id DESC LIMIT 200');
   res.json(rows.map((o) => ({ ...o, total_usd: centsToStr(o.total_cents), total_cents: undefined })));
 }));
 

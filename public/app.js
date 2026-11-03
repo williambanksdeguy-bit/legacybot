@@ -321,13 +321,14 @@
   const planDays = (d) => (d % 365 === 0 ? `${d / 365} year${d / 365 > 1 ? 's' : ''}` : `${d} days`);
 
   async function plansHtml() {
-    let data = { currencies: [], plans: [] };
+    let data = { markets: [], plans: [] };
     try { data = await api('GET', '/api/plans'); } catch { /* shown as empty */ }
-    const cur = data.currencies[0] || '';
+    const first = data.markets[0] || null;   // the price shown on the list; the customer sees their own country's price when paying
+    const cur = first ? first.code : '';
     const rows = data.plans.map((p) => `
       <div class="plan ${selectedPlan === p.id ? 'sel' : ''}">
         <div><b>${esc(p.name)}</b><small class="note">${planDays(p.days)}${p.note ? ' - ' + esc(p.note) : ''}</small></div>
-        <div class="price"><b>$${esc(p.total_usd)}</b><small class="note">$${esc(p.price_usd)} plan${Number(p.tax_usd) ? ` + $${esc(p.tax_usd)} tax` : ''}${cur ? ` &middot; ${cur} ${money(p.prices[cur])}` : ''}</small></div>
+        <div class="price"><b>$${esc(p.total_usd)}</b><small class="note">$${esc(p.price_usd)} plan${Number(p.tax_usd) ? ` + $${esc(p.tax_usd)} tax` : ''}${first ? ` &middot; ${first.currency} ${money(p.prices[first.code])}` : ''}</small></div>
         <button type="button" class="btn small solid" data-plan="${p.id}" ${cur ? '' : 'disabled'}>${me ? 'Buy this plan' : 'Sign up to buy'}</button>
       </div>`).join('');
     const note = !data.plans.length ? '<p class="note">No plans are available right now.</p>'
@@ -344,26 +345,38 @@
       root.querySelectorAll('.plan').forEach((el) => el.classList.toggle('sel', el.contains(b)));
       const p = info.data.plans.find((x) => x.id === selectedPlan);
       const box = root.querySelector('#payBox');
-      const methods = info.data.methods && info.data.methods.length ? info.data.methods : ['mobile_money'];
+      const mk = info.data.markets;
+      const byCode = Object.fromEntries(mk.map((m) => [m.code, m]));
+      const canCard = (info.data.methods || []).includes('card');
       box.innerHTML = `
         <form class="grid payform" id="momo">
           <h3 class="sec">Pay for ${esc(p.name)}</h3>
-          <p class="note">You pay ${info.cur} ${money(p.prices[info.cur])}.</p>
-          ${methods.length > 1
+          <p class="note" id="priceNote"></p>
+          ${canCard
             ? `<div class="seg"><label class="inline"><input type="radio" name="method" value="mobile_money" checked> Mobile money</label><label class="inline"><input type="radio" name="method" value="card"> Visa / Mastercard</label></div>`
             : '<input type="hidden" name="method" value="mobile_money">'}
-          <div id="phoneWrap"><label>Mobile money number<input name="phone" inputmode="tel" autocomplete="tel" placeholder="0772 123 456" required></label>
+          <div id="phoneWrap">
+            ${mk.length > 1
+              ? `<label>Country<select name="country">${mk.map((m) => `<option value="${esc(m.code)}">${esc(m.name)} (${esc(m.currency)})</option>`).join('')}</select></label>`
+              : `<input type="hidden" name="country" value="${esc(mk[0].code)}">`}
+            <label>Mobile money number<input name="phone" inputmode="tel" autocomplete="tel" required></label>
             <p class="note">A prompt will appear on your phone. Approve it to finish.</p></div>
-          <p class="note" id="cardNote" hidden>You will be taken to MarzPay's secure page to pay by card, then brought back here.</p>
+          <p class="note" id="cardNote" hidden>Card payments are charged in UGX. You will be taken to MarzPay's secure page to pay, then brought back here.</p>
           <div class="msg" id="mp"></div>
-          <button class="btn solid" type="submit">Pay ${info.cur} ${money(p.prices[info.cur])}</button>
+          <button class="btn solid" type="submit"></button>
         </form>`;
       const f = box.querySelector('#momo');
       const syncMethod = () => {
         const card = f.elements.method.value === 'card';
+        const code = card ? 'UG' : f.elements.country.value;
+        const m = byCode[code] || mk[0];
+        const label = `${m.currency} ${money(p.prices[m.code])}`;
+        f.querySelector('#priceNote').textContent = `You pay ${label}.`;
+        f.querySelector('button[type=submit]').textContent = `Pay ${label}`;
         f.querySelector('#phoneWrap').hidden = card;
         f.querySelector('#cardNote').hidden = !card;
         f.elements.phone.required = !card;
+        f.elements.phone.placeholder = (byCode[f.elements.country.value] || m).example;
       };
       f.addEventListener('change', syncMethod);
       syncMethod();
@@ -373,7 +386,7 @@
         btn.disabled = true;
         const fd = new FormData(f);
         try {
-          const r = await api('POST', '/api/me/pay', { plan_id: selectedPlan, currency: info.cur, method: fd.get('method'), phone: fd.get('phone') });
+          const r = await api('POST', '/api/me/pay', { plan_id: selectedPlan, currency: info.cur, method: fd.get('method'), country: fd.get('country'), phone: fd.get('phone') });
           if (r.redirect_url && /^https:\/\//.test(r.redirect_url)) location.href = r.redirect_url;
           else location.hash = '#/pay/' + r.order_id;
         } catch (err) { f.querySelector('#mp').textContent = err.message; btn.disabled = false; }
@@ -648,12 +661,13 @@
       const $p = document.getElementById('plansAdmin');
       const open = $p.open;
       $p.innerHTML = `
-        <summary>Plans, prices and exchange rate</summary>
-        <p class="note">Prices are in US dollars. Customers pay the plan price plus tax, shown in UGX at the rate below (rounded up to the next 100).</p>
+        <summary>Plans, prices, countries and exchange rates</summary>
+        <p class="note">Prices are in US dollars. Customers pay the plan price plus tax, converted at the rate for their country (Uganda is rounded up to the next 100).</p>
         <form class="grid" id="rates">
-          <label>UGX for 1 US dollar<input name="UGX" inputmode="decimal" value="${esc(planData.rates.UGX)}" required></label>
+          <p class="note"><b>Countries and exchange rates.</b> Type how much local money 1 US dollar costs to switch a country on. Leave it blank to switch it off. Card payments are always in UGX, so keep Uganda on for card.</p>
+          ${planData.markets.map((m) => `<label>${esc(m.name)}: ${esc(m.currency)} for 1 US dollar<input name="${esc(m.code)}" inputmode="decimal" placeholder="off" value="${esc(m.rate)}"></label>`).join('')}
           <div class="msg" id="mr"></div>
-          <button class="btn small solid" type="submit">Save rate</button>
+          <button class="btn small solid" type="submit">Save rates</button>
         </form>
         <h3 class="sec">Plans</h3>
         ${planData.onlineReady ? '' : '<p class="note">MarzPay keys are not set on the server yet, so customers cannot pay online.</p>'}
@@ -700,7 +714,7 @@
         ${orders.length ? orders.map((o) => `
           <div class="order" data-oid="${o.id}">
             <div class="between"><b>${esc(o.email || 'Deleted user')}</b><span class="badge ord-${esc(o.status.toLowerCase())}">${esc(o.status)}</span></div>
-            <div class="note">${esc(o.plan_name)} (${o.days} days) &middot; ${esc(o.currency)} ${money(o.charged)} ($${esc(o.total_usd)}) &middot; ${esc(o.phone || '')}</div>
+            <div class="note">${esc(o.plan_name)} (${o.days} days) &middot; ${esc(o.currency)} ${money(o.charged)} ($${esc(o.total_usd)}) &middot; ${esc(o.country || '')} ${o.phone ? esc(o.phone) : 'card'}</div>
             <div class="note">${new Date(o.created_at).toLocaleString('en-GB')}${o.note ? ' &middot; ' + esc(o.note) : ''}</div>
             ${o.status === 'PAID' ? '' : `<div class="actions"><button class="btn small" data-ocheck="${o.id}">Re-check with MarzPay</button><button class="btn small green" data-oapprove="${o.id}">Approve (money received)</button></div>`}
           </div>`).join('') : '<p class="note">No online payments yet.</p>'}`;
